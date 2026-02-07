@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>貼圖工具 - 左鍵圈選/右鍵移動</title>
+    <title>貼圖圈選工具 - 修正版</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #1a1a1a; color: #eee; margin: 0; padding: 10px; min-height: 100vh; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #1a1a1a; color: #eee; margin: 0; padding: 10px; min-height: 100vh; overflow-x: hidden; }
         .canvas-container { position: relative; box-shadow: 0 5px 20px rgba(0,0,0,0.5); touch-action: none; margin-top: 10px; border: 2px solid #555; background: #000; overflow: hidden; width: 100%; max-width: 350px; aspect-ratio: 1/1; }
-        canvas { display: block; }
+        canvas { display: block; cursor: crosshair; width: 100%; height: 100%; }
         .controls { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 350px; }
         button, label { background: #007bff; color: white; padding: 14px; border: none; border-radius: 10px; text-align: center; cursor: pointer; font-size: 16px; font-weight: bold; }
         #downloadBtn { background: #28a745; }
@@ -19,14 +19,14 @@
 </head>
 <body>
 
-    <h2>貼圖圈選工具</h2>
+    <h2>貼圖圈選 (穩定縮放版)</h2>
     <div class="hint">
-        電腦：<b>左鍵</b>畫範圍 / <b>右鍵</b>拖曳圖片 / <b>滾輪</b>縮放<br>
-        手機：<b>單指</b>畫範圍 / <b>兩指</b>縮放與移動
+        <b>兩指</b>：移動圖片與縮放大小<br>
+        <b>單指</b>：圈選貼圖範圍（請先放好圖片）
     </div>
     
-    <div class="canvas-container">
-        <canvas id="mainCanvas" width="350" height="350"></canvas>
+    <div class="canvas-container" id="container">
+        <canvas id="mainCanvas"></canvas>
     </div>
 
     <div class="controls">
@@ -47,15 +47,14 @@
 
         let img = new Image();
         let points = []; 
-        let isLassoing = false; // 左鍵圈選中
-        let isDragging = false; // 右鍵拖曳中
+        let isLassoing = false;
         
         let imgX = 0, imgY = 0, imgScale = 1;
         let lastTouchDist = 0;
-        let lastPos = {x: 0, y: 0};
+        let lastTouchMid = {x: 0, y: 0};
 
-        // 停用右鍵選單
-        canvas.addEventListener('contextmenu', e => e.preventDefault());
+        canvas.width = 350;
+        canvas.height = 350;
 
         function render() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -70,102 +69,94 @@
                 ctx.restore();
             }
 
-            if (points.length > 1) {
+            if (points.length > 0) {
                 ctx.beginPath();
                 ctx.lineWidth = 2;
                 ctx.strokeStyle = "#ff4d4d";
                 ctx.fillStyle = "rgba(255, 77, 77, 0.2)";
                 ctx.moveTo(points[0].x, points[0].y);
-                for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i].x, points[i].y);
+                }
                 if (!isLassoing) ctx.closePath();
                 ctx.fill();
                 ctx.stroke();
             }
         }
 
-        function getPos(e) {
-            const rect = canvas.getBoundingClientRect();
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            return { x: clientX - rect.left, y: clientY - rect.top };
+        function getDist(t1, t2) {
+            return Math.sqrt(Math.pow(t2.clientX - t1.clientX, 2) + Math.pow(t2.clientY - t1.clientY, 2));
         }
 
-        // 滾輪縮放
-        canvas.addEventListener('wheel', (e) => {
+        function getMid(t1, t2) {
+            return { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+        }
+
+        canvas.addEventListener('touchstart', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            if (e.touches.length === 1) {
+                isLassoing = true;
+                // 只有在沒點過的時候才初始化 points，或是你想每次重畫就留著
+                points = [{ x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top }];
+            } else if (e.touches.length === 2) {
+                isLassoing = false; // 切換到兩指時停止圈選
+                lastTouchDist = getDist(e.touches[0], e.touches[1]);
+                lastTouchMid = getMid(e.touches[0], e.touches[1]);
+            }
+        }, {passive: false});
+
+        canvas.addEventListener('touchmove', (e) => {
             e.preventDefault();
-            const delta = e.deltaY < 0 ? 1.1 : 0.9;
-            imgScale *= delta;
+            const rect = canvas.getBoundingClientRect();
+            
+            if (e.touches.length === 1 && isLassoing) {
+                points.push({ x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top });
+            } else if (e.touches.length === 2) {
+                const dist = getDist(e.touches[0], e.touches[1]);
+                const mid = getMid(e.touches[0], e.touches[1]);
+                
+                // 轉換畫布相對座標
+                const canvasMidX = mid.x - rect.left;
+                const canvasMidY = mid.y - rect.top;
+                const lastCanvasMidX = lastTouchMid.x - rect.left;
+                const lastCanvasMidY = lastTouchMid.y - rect.top;
+
+                const zoom = dist / lastTouchDist;
+                
+                // 計算位移
+                const dx = canvasMidX - lastCanvasMidX;
+                const dy = canvasMidY - lastCanvasMidY;
+
+                // 更新圖片位置 (包含縮放中心修正與移動)
+                imgX = canvasMidX - (canvasMidX - imgX) * zoom + dx;
+                imgY = canvasMidY - (canvasMidY - imgY) * zoom + dy;
+                imgScale *= zoom;
+                
+                lastTouchDist = dist;
+                lastTouchMid = mid;
+            }
             render();
         }, {passive: false});
 
-        // 按下
-        const onDown = (e) => {
-            const pos = getPos(e);
-            lastPos = pos;
-
-            if (e.touches && e.touches.length === 2) {
-                isLassoing = false;
-                lastTouchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-                return;
-            }
-
-            if (e.button === 2) { // 右鍵
-                isDragging = true;
-                isLassoing = false;
-            } else { // 左鍵或單指
-                isLassoing = true;
-                isDragging = false;
-                points = [pos];
-            }
-        };
-
-        // 移動
-        const onMove = (e) => {
-            const pos = getPos(e);
-
-            // 手機兩指縮放
-            if (e.touches && e.touches.length === 2) {
-                const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-                imgScale *= (dist / lastTouchDist);
-                lastTouchDist = dist;
-                render();
-                return;
-            }
-
-            if (isDragging) { // 右鍵拖曳圖片
-                imgX += (pos.x - lastPos.x);
-                imgY += (pos.y - lastPos.y);
-                lastPos = pos;
-                render();
-            } else if (isLassoing) { // 左鍵圈選範圍
-                points.push(pos);
-                render();
-            }
-            if (e.touches) e.preventDefault();
-        };
-
-        const onUp = () => {
-            isLassoing = false;
-            isDragging = false;
-            render();
-        };
-
-        canvas.addEventListener('mousedown', onDown);
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
-        canvas.addEventListener('touchstart', onDown, {passive: false});
-        window.addEventListener('touchmove', onMove, {passive: false});
-        window.addEventListener('touchend', onUp);
+        canvas.addEventListener('touchend', (e) => { 
+            isLassoing = false; 
+            // 當手指放開剩一根或全放開時，重置距離記錄，防止下次跳動
+            lastTouchDist = 0;
+            render(); 
+        });
 
         upload.onchange = (e) => {
             const file = e.target.files[0];
+            if(!file) return;
             const reader = new FileReader();
             reader.onload = (f) => {
                 img.onload = () => {
-                    imgScale = 350 / Math.max(img.width, img.height);
-                    imgX = (350 - img.width * imgScale) / 2;
-                    imgY = (350 - img.height * imgScale) / 2;
-                    points = []; render();
+                    const ratio = Math.min(350 / img.width, 350 / img.height);
+                    imgScale = ratio;
+                    imgX = (350 - img.width * ratio) / 2;
+                    imgY = (350 - img.height * ratio) / 2;
+                    points = [];
+                    render();
                 };
                 img.src = f.target.result;
             };
@@ -179,23 +170,28 @@
             const outCanvas = document.createElement('canvas');
             outCanvas.width = 350; outCanvas.height = 350;
             const outCtx = outCanvas.getContext('2d');
+            
             outCtx.fillStyle = "white";
             outCtx.fillRect(0, 0, 350, 350);
+            
             outCtx.save();
             outCtx.beginPath();
             outCtx.moveTo(points[0].x, points[0].y);
             for(let i=1; i<points.length; i++) outCtx.lineTo(points[i].x, points[i].y);
             outCtx.closePath();
             outCtx.clip();
+            
             outCtx.translate(imgX, imgY);
             outCtx.scale(imgScale, imgScale);
             outCtx.drawImage(img, 0, 0);
             outCtx.restore();
+
             const link = document.createElement('a');
-            link.download = 'sticker_clean.png';
+            link.download = 'sticker.png';
             link.href = outCanvas.toDataURL('image/png');
             link.click();
         };
+
         render();
     </script>
 </body>
